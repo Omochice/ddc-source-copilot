@@ -22,53 +22,25 @@ type Suggestion = {
   uuid: string;
 };
 
-type Params = Record<string, never>;
+type Params = {
+  copilot: "vim" | "lua";
+};
 
 export class Source extends BaseSource<Params> {
   async gather(
     args: GatherArguments<Params>,
   ): Promise<DdcGatherItems> {
-    if (!(await fn.exists(args.denops, "*copilot#Complete"))) {
-      return [];
+    switch (args.sourceParams.copilot) {
+      case "vim":
+        updateItems(args.denops, this.name, args.completePos);
+        break;
+      case "lua":
+        args.denops.call(
+          "luaeval",
+          `require('ddc.source.copilot').update_items("${this.name}", ${args.completePos})`,
+        );
+        break;
     }
-
-    const f = async () => {
-      await batch(args.denops, async (denops: Denops) => {
-        await denops.call("copilot#Suggest");
-        await denops.call("copilot#Next");
-        await denops.call("copilot#Previous");
-      });
-
-      while (!(await fn.exists(args.denops, "b:_copilot.suggestions"))) {
-        await delay(10);
-      }
-
-      const suggestions = await args.denops.call(
-        "eval",
-        "b:_copilot.suggestions",
-      ) as Suggestion[];
-
-      const items = suggestions.map(({ text }) => {
-        const match = /^(?<indent>\s*).+/.exec(text);
-        const indent = match?.groups?.indent;
-
-        const info = indent != null
-          ? text.split("\n").map((line) => line.slice(indent.length)).join("\n")
-          : text;
-
-        return {
-          word: text.split("\n")[0].slice(args.completePos),
-          info,
-          user_data: {
-            word: text,
-          },
-        };
-      });
-
-      await args.denops.call("ddc#update_items", this.name, items);
-    };
-
-    f();
 
     return await Promise.resolve({
       items: [],
@@ -76,8 +48,10 @@ export class Source extends BaseSource<Params> {
     });
   }
 
-  params() {
-    return {};
+  params(): Params {
+    return {
+      copilot: "vim",
+    };
   }
 
   async onCompleteDone(
@@ -104,4 +78,48 @@ export class Source extends BaseSource<Params> {
       0,
     ]);
   }
+}
+
+async function updateItems(
+  denops: Denops,
+  name: string,
+  completePos: number,
+): Promise<void> {
+  if (!(await fn.exists(denops, "*copilot#Complete"))) {
+    return;
+  }
+
+  await batch(denops, async (denops: Denops) => {
+    await denops.call("copilot#Suggest");
+    await denops.call("copilot#Next");
+    await denops.call("copilot#Previous");
+  });
+
+  while (!(await fn.exists(denops, "b:_copilot.suggestions"))) {
+    await delay(10);
+  }
+
+  const suggestions = await denops.call(
+    "eval",
+    "b:_copilot.suggestions",
+  ) as Suggestion[];
+
+  const items = suggestions.map(({ text }) => {
+    const match = /^(?<indent>\s*).+/.exec(text);
+    const indent = match?.groups?.indent;
+
+    const info = indent != null
+      ? text.split("\n").map((line) => line.slice(indent.length)).join("\n")
+      : text;
+
+    return {
+      word: text.split("\n")[0].slice(completePos),
+      info,
+      user_data: {
+        word: text,
+      },
+    };
+  });
+
+  await denops.call("ddc#update_items", name, items);
 }
